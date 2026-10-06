@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fruit Basket – Sopetrán Spelling Game</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600..800&family=DM+Sans:wght@400..700&display=swap" rel="stylesheet">
+<style>
+  :root{--leaf:#1d3324;--cream:#fbf4e6;--mango:#f5a524;--coral:#b83d26;--ok:#2f8f4e}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;background:var(--cream);font-family:'DM Sans',Arial,sans-serif;color:var(--leaf)}
+  canvas{display:block;width:100vw;height:100dvh;touch-action:none;user-select:none;-webkit-user-select:none}
+  .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;
+           background:rgba(29,51,36,.88);color:var(--cream);z-index:2}
+  .overlay[hidden]{display:none}
+  .card{width:min(560px,100%);max-height:100%;overflow:auto;text-align:center;display:flex;flex-direction:column;gap:18px}
+  h1{font-family:'Bricolage Grotesque',Arial,sans-serif;font-size:clamp(40px,9vw,64px);line-height:1;font-weight:800}
+  h2{font-family:'Bricolage Grotesque',Arial,sans-serif;font-size:clamp(28px,6vw,40px);font-weight:800}
+  p{font-size:18px;line-height:1.5}
+  .sub{color:var(--mango);font-weight:700;font-size:20px}
+  button{font:700 22px 'DM Sans',Arial,sans-serif;background:var(--mango);color:var(--leaf);border:0;border-radius:14px;
+         padding:16px 36px;cursor:pointer;align-self:center}
+  button:hover{filter:brightness(1.05)}
+  button:focus-visible{outline:3px solid var(--cream);outline-offset:3px}
+  .score{font-family:'Bricolage Grotesque',Arial,sans-serif;font-size:88px;font-weight:800;color:var(--mango);line-height:1}
+  .stats{display:flex;justify-content:center;gap:28px;font-size:17px;opacity:.9}
+  .review{text-align:left;background:rgba(251,244,230,.08);border-radius:14px;padding:16px 18px}
+  .review h3{font-size:17px;margin-bottom:8px;color:var(--mango)}
+  .review li{list-style:none;font-size:17px;padding:4px 0;display:flex;gap:10px;align-items:baseline}
+  .review .right{font-weight:700}
+  .review .wrong{opacity:.7;text-decoration:line-through}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<canvas id="game" aria-label="Fruit spelling game"></canvas>
+
+<div class="overlay" id="start">
+  <div class="card">
+    <p class="sub">Fiestas de las Frutas · Sopetrán</p>
+    <h1>Fruit Basket</h1>
+    <p>Fruits are falling! Drag each fruit into the basket with the <b>correct English spelling</b>.</p>
+    <p>A wrong basket or a dropped fruit costs one life. You have 3 lives.</p>
+    <button id="playBtn">Play</button>
+  </div>
+</div>
+
+<div class="overlay" id="over" hidden>
+  <div class="card">
+    <h2>Game over</h2>
+    <div class="score" id="finalScore">0</div>
+    <div class="stats"><span id="statCorrect"></span><span id="statBest"></span></div>
+    <div class="review" id="review" hidden><h3>Words to review</h3><ul id="reviewList"></ul></div>
+    <button id="againBtn">Play again</button>
+  </div>
+</div>
+
+<script>
+const FRUITS = [
+  {e:'🍎', w:'apple',      bad:['aple','appel','apel']},
+  {e:'🍌', w:'banana',     bad:['bananna','banan','vanana']},
+  {e:'🍇', w:'grapes',     bad:['graps','grapess','greips']},
+  {e:'🍉', w:'watermelon', bad:['watermelone','watermellon','wotermelon']},
+  {e:'🍓', w:'strawberry', bad:['strawbery','strawberri','strowberry']},
+  {e:'🍍', w:'pineapple',  bad:['pinapple','pineaple','pineappel']},
+  {e:'🥭', w:'mango',      bad:['mangoe','mengo','mangou']},
+  {e:'🍋', w:'lemon',      bad:['lemmon','limon','lemonn']},
+  {e:'🍊', w:'orange',     bad:['orage','oranje','ornage']},
+  {e:'🍐', w:'pear',       bad:['pera','paer','peer']},
+  {e:'🍑', w:'peach',      bad:['peech','peash','pech']},
+  {e:'🍒', w:'cherries',   bad:['cherrys','cheries','cherris']},
+  {e:'🥝', w:'kiwi',       bad:['kiwy','kivi','kiwii']},
+  {e:'🥥', w:'coconut',    bad:['cocconut','coconat','cocounut']},
+  {e:'🍈', w:'melon',      bad:['mellon','melone','melom']},
+  {e:'🥑', w:'avocado',    bad:['avocato','abocado','avacado']}
+];
+
+const cv = document.getElementById('game'), ctx = cv.getContext('2d');
+let W=0, H=0, DPR=1;
+let state='menu', score=0, lives=3, correct=0, streak=0, mistakes=[];
+let fruit=null, baskets=[], bag=[], floaters=[], feedback=null, last=0, shake=0;
+
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1, 2);
+  W = innerWidth; H = innerHeight;
+  cv.width = W*DPR; cv.height = H*DPR;
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  layoutBaskets();
+}
+addEventListener('resize', resize);
+
+const fruitR = () => Math.max(34, Math.min(62, Math.min(W,H)*0.075));
+
+function layoutBaskets(){
+  const bw = Math.min(W*0.38, 300), bh = bw*0.55, m = Math.max(12, W*0.03);
+  const y = H - bh - Math.max(20, H*0.04);
+  if (baskets.length===2){
+    baskets[0].x=m; baskets[1].x=W-bw-m;
+    baskets.forEach(b=>{b.y=y;b.w=bw;b.h=bh});
+  } else {
+    baskets=[{x:m,y,w:bw,h:bh,label:'',ok:false,flash:0,flashOk:false},
+             {x:W-bw-m,y,w:bw,h:bh,label:'',ok:false,flash:0,flashOk:false}];
+  }
+}
+
+function nextFruitData(){
+  if (!bag.length){
+    bag = FRUITS.slice().sort(()=>Math.random()-.5);
+    if (fruit && bag[0]===fruit.d) bag.push(bag.shift());
+  }
+  return bag.shift();
+}
+
+function spawn(){
+  const d = nextFruitData();
+  const badWord = d.bad[Math.floor(Math.random()*d.bad.length)];
+  const okLeft = Math.random()<.5;
+  baskets[0].label = okLeft ? d.w : badWord; baskets[0].ok = okLeft;
+  baskets[1].label = okLeft ? badWord : d.w; baskets[1].ok = !okLeft;
+  const level = Math.floor(correct/3);
+  fruit = {
+    d, x: W/2 + (Math.random()-.5)*W*0.2, y: -fruitR(),
+    vy: H*Math.min(0.13 + level*0.015, 0.42), rot:(Math.random()-.5)*.4,
+    drag:false, ox:0, oy:0, pid:null
+  };
+}
+
+function start(){
+  score=0; lives=3; correct=0; streak=0; mistakes=[]; floaters=[]; feedback=null; bag=[]; fruit=null;
+  layoutBaskets(); spawn(); state='play';
+  document.getElementById('start').hidden = true;
+  document.getElementById('over').hidden = true;
+}
+
+function insideBasket(b, x, y){
+  const pad = fruitR()*0.6;
+  return x > b.x - pad && x < b.x + b.w + pad && y > b.y - pad - 30 && y < b.y + b.h;
+}
+
+function resolve(b){
+  const f = fruit; fruit = null;
+  b.flash = 1; b.flashOk = b.ok;
+  if (b.ok){
+    streak++; correct++;
+    const pts = 10 + (streak>=3 ? 5 : 0);
+    score += pts;
+    floaters.push({x:b.x+b.w/2, y:b.y-40, t:1, text:'+'+pts, color:'#2f8f4e'});
+  } else {
+    streak=0; lives--; shake=1;
+    mistakes.push({e:f.d.e, right:f.d.w, chose:b.label});
+    floaters.push({x:b.x+b.w/2, y:b.y-40, t:1, text:'✗', color:'#b83d26'});
+  }
+  showFeedback(f.d, b.ok);
+}
+
+function miss(){
+  const f = fruit; fruit=null; streak=0; lives--; shake=1;
+  mistakes.push({e:f.d.e, right:f.d.w, chose:null});
+  floaters.push({x:f.x, y:H-80, t:1, text:'Dropped!', color:'#b83d26'});
+  showFeedback(f.d, false);
+}
+
+function showFeedback(d, ok){
+  feedback = {d, ok, t:0.9};
+}
+
+function gameOver(){
+  state='over';
+  let best=0; try{ best = Math.max(score, +localStorage.getItem('fruitBest')||0); localStorage.setItem('fruitBest', best);}catch(e){best=score}
+  document.getElementById('finalScore').textContent = score;
+  document.getElementById('statCorrect').textContent = `Correct: ${correct}`;
+  document.getElementById('statBest').textContent = `Best: ${best}`;
+  const list = document.getElementById('reviewList'); list.innerHTML='';
+  const seen = new Set();
+  mistakes.forEach(m=>{
+    if (seen.has(m.right)) return; seen.add(m.right);
+    const li=document.createElement('li');
+    li.innerHTML = `<span>${m.e}</span><span class="right">${m.right}</span>` +
+      (m.chose ? `<span class="wrong">${m.chose}</span>` : `<span style="opacity:.7">(dropped)</span>`);
+    list.appendChild(li);
+  });
+  document.getElementById('review').hidden = !mistakes.length;
+  document.getElementById('over').hidden = false;
+  document.getElementById('againBtn').focus();
+}
+
+/* ---- input ---- */
+function pt(e){ const r=cv.getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top}; }
+cv.addEventListener('pointerdown', e=>{
+  if (state!=='play' || !fruit) return;
+  const p=pt(e), r=fruitR();
+  if (Math.hypot(p.x-fruit.x, p.y-fruit.y) < r*1.35){
+    fruit.drag=true; fruit.pid=e.pointerId; fruit.ox=fruit.x-p.x; fruit.oy=fruit.y-p.y;
+    cv.setPointerCapture(e.pointerId);
+  }
+});
+cv.addEventListener('pointermove', e=>{
+  if (!fruit || !fruit.drag || e.pointerId!==fruit.pid) return;
+  const p=pt(e); fruit.x=p.x+fruit.ox; fruit.y=p.y+fruit.oy;
+});
+function release(e){
+  if (!fruit || !fruit.drag || e.pointerId!==fruit.pid) return;
+  fruit.drag=false;
+  const b = baskets.find(b=>insideBasket(b, fruit.x, fruit.y));
+  if (b) resolve(b);
+}
+cv.addEventListener('pointerup', release);
+cv.addEventListener('pointercancel', release);
+
+document.getElementById('playBtn').onclick = start;
+document.getElementById('againBtn').onclick = start;
+
+/* ---- drawing ---- */
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+function drawBackground(){
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#fff7e8'); g.addColorStop(1,'#f7e3bf');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  // hills
+  ctx.fillStyle='#cfe0b4';
+  ctx.beginPath(); ctx.moveTo(0,H*0.78);
+  ctx.quadraticCurveTo(W*0.25,H*0.66,W*0.5,H*0.76); ctx.quadraticCurveTo(W*0.75,H*0.84,W,H*0.72);
+  ctx.lineTo(W,H); ctx.lineTo(0,H); ctx.fill();
+  ctx.fillStyle='#1d3324'; ctx.fillRect(0,H-Math.max(20,H*0.04)+6,W,H);
+}
+
+function drawBasket(b){
+  const {x,y,w,h}=b;
+  ctx.save();
+  // glow
+  if (b.flash>0){
+    ctx.shadowColor = b.flashOk ? 'rgba(47,143,78,.9)' : 'rgba(184,61,38,.9)';
+    ctx.shadowBlur = 40*b.flash;
+  }
+  // body (trapezoid)
+  const inset=w*0.1;
+  ctx.beginPath(); ctx.moveTo(x,y+h*0.18); ctx.lineTo(x+w,y+h*0.18); ctx.lineTo(x+w-inset,y+h); ctx.lineTo(x+inset,y+h); ctx.closePath();
+  ctx.fillStyle='#b8742f'; ctx.fill();
+  ctx.shadowBlur=0;
+  ctx.save(); ctx.clip();
+  ctx.strokeStyle='rgba(90,50,15,.45)'; ctx.lineWidth=3;
+  for(let i=1;i<5;i++){ const yy=y+h*0.18+i*(h*0.82/5); ctx.beginPath(); ctx.moveTo(x,yy); ctx.lineTo(x+w,yy); ctx.stroke(); }
+  for(let i=1;i<8;i++){ const xx=x+i*w/8; ctx.beginPath(); ctx.moveTo(xx,y); ctx.lineTo(xx+(xx<x+w/2?inset*.4:-inset*.4),y+h); ctx.stroke(); }
+  ctx.restore();
+  // rim
+  roundRect(x-4,y+h*0.08,w+8,h*0.16,h*0.08); ctx.fillStyle='#8a5320'; ctx.fill();
+  // label sign
+  const fs = Math.max(16, Math.min(30, w*0.12));
+  ctx.font = `700 ${fs}px 'DM Sans', Arial, sans-serif`;
+  let size=fs; while(ctx.measureText(b.label).width > w-28 && size>12){ size--; ctx.font=`700 ${size}px 'DM Sans', Arial, sans-serif`; }
+  const sh=size*1.9, sy=y-sh-8;
+  let signColor='#fbf4e6', textColor='#1d3324';
+  if (b.flash>0){ signColor = b.flashOk ? '#2f8f4e' : '#b83d26'; textColor='#fbf4e6'; }
+  roundRect(x+6,sy,w-12,sh,12); ctx.fillStyle=signColor; ctx.fill();
+  ctx.lineWidth=3; ctx.strokeStyle='#1d3324'; ctx.stroke();
+  ctx.fillStyle=textColor; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(b.label, x+w/2, sy+sh/2+1);
+  ctx.restore();
+}
+
+function drawFruit(f){
+  const r=fruitR();
+  ctx.save();
+  ctx.translate(f.x,f.y);
+  if (f.drag) ctx.scale(1.12,1.12);
+  ctx.beginPath(); ctx.arc(0,0,r*1.05,0,Math.PI*2);
+  ctx.fillStyle = f.drag ? 'rgba(245,165,36,.35)' : 'rgba(255,255,255,.55)'; ctx.fill();
+  ctx.rotate(f.rot);
+  ctx.font=`${r*1.5}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(f.d.e,0,r*0.06);
+  ctx.restore();
+}
+
+function drawHUD(){
+  const pad=Math.max(14,W*0.025), fs=Math.max(22,Math.min(34,W*0.05));
+  ctx.textBaseline='top';
+  ctx.font=`800 ${fs}px 'Bricolage Grotesque', Arial, sans-serif`;
+  ctx.fillStyle='#1d3324'; ctx.textAlign='left';
+  ctx.fillText(`Score ${score}`, pad, pad);
+  if (streak>=3){ ctx.font=`700 ${fs*0.55}px 'DM Sans', Arial, sans-serif`; ctx.fillStyle='#b83d26'; ctx.fillText(`Streak ×${streak}  +5 bonus`, pad, pad+fs*1.15); }
+  // hearts
+  ctx.textAlign='right'; ctx.font=`${fs}px Arial, sans-serif`;
+  let s=''; for(let i=0;i<3;i++) s += i<lives ? '♥' : '♡';
+  ctx.fillStyle='#b83d26'; ctx.fillText(s, W-pad, pad);
+}
+
+function drawFeedback(){
+  if (!feedback) return;
+  const a=Math.min(1,feedback.t*2.5);
+  ctx.save(); ctx.globalAlpha=a;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  const fs=Math.max(26,Math.min(48,W*0.07));
+  ctx.font=`${fs*1.6}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+  ctx.fillText(feedback.d.e, W/2, H*0.32);
+  ctx.font=`800 ${fs}px 'Bricolage Grotesque', Arial, sans-serif`;
+  ctx.fillStyle = feedback.ok ? '#2f8f4e' : '#b83d26';
+  ctx.fillText(feedback.ok ? 'Correct!' : feedback.d.w, W/2, H*0.32+fs*1.5);
+  ctx.restore();
+}
+
+function drawFloaters(dt){
+  floaters = floaters.filter(f=>(f.t-=dt*1.2)>0);
+  floaters.forEach(f=>{
+    ctx.save(); ctx.globalAlpha=f.t; ctx.fillStyle=f.color; ctx.textAlign='center';
+    ctx.font=`800 ${Math.max(26,W*0.045)}px 'Bricolage Grotesque', Arial, sans-serif`;
+    ctx.fillText(f.text, f.x, f.y-(1-f.t)*50); ctx.restore();
+  });
+}
+
+function loop(t){
+  const dt=Math.min(0.05,(t-last)/1000||0); last=t;
+  ctx.save();
+  if (shake>0){ ctx.translate((Math.random()-.5)*12*shake,(Math.random()-.5)*12*shake); shake=Math.max(0,shake-dt*4); }
+  drawBackground();
+
+  if (state==='play'){
+    if (fruit && !fruit.drag){
+      fruit.y += fruit.vy*dt;
+      if (fruit.y - fruitR() > H) miss();
+    }
+    if (feedback){
+      feedback.t -= dt;
+      if (feedback.t<=0){ feedback=null; if (lives<=0) gameOver(); else spawn(); }
+    }
+  }
+  baskets.forEach(b=>{ b.flash=Math.max(0,b.flash-dt*1.4); });
+  if (state!=='menu') baskets.forEach(drawBasket);
+  if (fruit) drawFruit(fruit);
+  drawFeedback();
+  drawFloaters(dt);
+  if (state!=='menu') drawHUD();
+  ctx.restore();
+  requestAnimationFrame(loop);
+}
+
+resize();
+requestAnimationFrame(loop);
+document.getElementById('playBtn').focus();
+</script>
+</body>
+</html>
